@@ -19,6 +19,7 @@ const $ = new Env('opapp-capture-gist');
 const CONFIG = {
   cookieKey: 'opapp_cookie',
   csrfKey: 'opapp_csrf',
+  uaKey: 'opapp_ua',
   githubTokenKey: 'opapp_github_token',
   gistIdKey: 'opapp_gist_id',
   gistFilenameKey: 'opapp_gist_filename',
@@ -36,6 +37,24 @@ const CONFIG = {
     log(`[${$.name}] 执行异常: ${e}`);
     $.msg($.name, '脚本执行异常', e.toString());
   }
+
+  // --- 逻辑 2：修改有效期 (响应阶段) ---
+  if (typeof $response !== "undefined") {
+    let setCookie = $response.headers["Set-Cookie"] || $response.headers["set-cookie"];
+    if (setCookie && setCookie.indexOf("PHPSESSID") != -1) {
+      // 核心修改：通过正则匹配，在 path=/ 后面强行插入 Expires 属性
+      // 将原本的会话 Cookie 伪装成持久 Cookie
+      let longLiveCookie = setCookie.replace(/path=\/;/gi, "path=/; Expires=Sat, 26 Dec 2026 18:00:00 GMT;");
+      $done({
+        headers: {
+          ...$response.headers,
+          "Set-Cookie": longLiveCookie // 返回给小程序的 headers 已被篡改
+        }
+      });
+      return;
+    }
+  }
+
   $done({});
 })();
 
@@ -63,6 +82,9 @@ async function captureOpappCreds() {
   const origin = reqHeaders['Origin'] || reqHeaders['origin'] || reqHeaders['Referer'] || reqHeaders['referer'] || resHeaders['Origin'] || resHeaders['origin'] || 'https://g.opapp.cn';
   // set-cookie
   const setCookieHeader = resHeaders['Set-Cookie'] || resHeaders['set-cookie'] || reqHeaders['Set-Cookie'] || reqHeaders['set-cookie'] || null;
+  // User-Agent
+  const userAgent = reqHeaders['User-Agent'] || reqHeaders['user-agent'] || '';
+
   // 响应体提取 csrf
   if (body && !csrf) {
     try {
@@ -76,6 +98,7 @@ async function captureOpappCreds() {
   // 本地持久化
   if (cookie) setValue(cookie, CONFIG.cookieKey);
   if (csrf) setValue(csrf, CONFIG.csrfKey);
+  if (userAgent) setValue(userAgent, CONFIG.uaKey);
 
   // 读取 gist 以对比
   const gistResult = await getGistOpapp();
@@ -84,12 +107,16 @@ async function captureOpappCreds() {
     $.msg($.name, '获取 Gist 失败', gistResult.message || '无法获取远端数据，请检查配置或网络');
   }
 
+  // 验证并解析 Cookie 有效期
+  const validation = validateAndParseCookies(cookie, setCookieHeader);
+
   // 构造本地最新 payload
   const localPayload = await buildPayload({ 
       requestCookie: cookie, 
       setCookieHeader, 
       originHeader: origin,
-      tokenExpire: validation.tokenExpire 
+      tokenExpire: validation.tokenExpire,
+      userAgent
   });
   // 若信息不全（无cookie），仅本地保存，等待下次补全
   if (!cookie) {
@@ -206,11 +233,12 @@ function stableStringify(obj) {
 }
 
 async function buildPayload(opts) {
-  // opts: { requestCookie, setCookieHeader, responseLocalStorage, originHeader }
+  // opts: { requestCookie, setCookieHeader, responseLocalStorage, originHeader, userAgent }
   const requestCookie = opts.requestCookie || '';
   const setCookieHeader = opts.setCookieHeader || null;
   const responseLocalStorage = opts.responseLocalStorage || [];
   const originHeader = opts.originHeader || 'https://g.opapp.cn';
+  const userAgent = opts.userAgent || '';
 
   const cookieMap = new Map();
 
@@ -230,7 +258,14 @@ async function buildPayload(opts) {
     // Set-Cookie 可能为字符串或数组
     const scs = Array.isArray(setCookieHeader) ? setCookieHeader : String(setCookieHeader).split(/,(?=[^;]+=)/);
     for (const sc of scs) {
-      const parts = sc.split(/;\s*/).filter(Boolean);
+      // 检查是否需要应用 "强制延期" 逻辑 (针对 PHPSESSID)
+      let finalSc = sc;
+      if (sc.indexOf("PHPSESSID") != -1 && sc.indexOf("Expires=") == -1 && sc.indexOf("Max-Age=") == -1) {
+          // 模拟 Logic 2 的行为：如果原始 Set-Cookie 没有过期时间，强制加上 2026 年
+          finalSc = sc.replace(/path=\/;/gi, "path=/; Expires=Sat, 26 Dec 2026 18:00:00 GMT;");
+      }
+
+      const parts = finalSc.split(/;\s*/).filter(Boolean);
       if (parts.length === 0) continue;
       const nv = parts[0];
       const idx = nv.indexOf('=');
@@ -239,6 +274,9 @@ async function buildPayload(opts) {
       const value = nv.slice(idx + 1).trim();
       let domain = 'g.opapp.cn';
       let path = '/';
+      let expires = null;
+      let maxAge = null;
+
       for (let i = 1; i < parts.length; i++) {
         const kv = parts[i];
         const kidx = kv.indexOf('=');
@@ -246,8 +284,15 @@ async function buildPayload(opts) {
         const v = kidx >= 0 ? kv.slice(kidx + 1).trim() : '';
         if (k === 'domain' && v) domain = v;
         if (k === 'path' && v) path = v;
+        if (k === 'expires' && v) expires = v;
+        if (k === 'max-age' && v) maxAge = v;
       }
-      cookieMap.set(name, { name, value, domain, path });
+      
+      const cookieObj = { name, value, domain, path };
+      if (expires) cookieObj.expires = expires;
+      if (maxAge) cookieObj.maxAge = maxAge;
+      
+      cookieMap.set(name, cookieObj);
     }
   }
 
@@ -271,7 +316,12 @@ async function buildPayload(opts) {
   }
   // 兼容 header/body 直接传入
   if (opts && opts.csrf) opapp_csrf = opts.csrf;
-  return { cookies, origins, opapp_cookie, opapp_csrf };
+  
+  // 提取传入的 tokenExpire (如果有)
+  let opapp_token_expire = 0;
+  if (opts && opts.tokenExpire) opapp_token_expire = opts.tokenExpire;
+
+  return { cookies, origins, opapp_cookie, opapp_csrf, userAgent, opapp_token_expire };
 }
 
 function parseLocalStorage(storageRaw) {
