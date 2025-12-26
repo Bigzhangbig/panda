@@ -212,7 +212,17 @@ async function buildPayload(opts) {
     }
   ];
 
-  return { cookies, origins };
+  // 拼接 opapp_cookie
+  const opapp_cookie = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+  // 自动提取 csrf/token
+  let opapp_csrf = '';
+  for (const c of cookies) {
+    if (c.name.toLowerCase().includes('csrf')) opapp_csrf = c.value;
+    if (c.name.toLowerCase() === 'token') opapp_csrf = c.value;
+  }
+  // 兼容 header/body 直接传入
+  if (opts && opts.csrf) opapp_csrf = opts.csrf;
+  return { cookies, origins, opapp_cookie, opapp_csrf };
 }
 
 function parseLocalStorage(storageRaw) {
