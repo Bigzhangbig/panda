@@ -41,7 +41,10 @@ const CONFIG = {
 
 
 function log(msg) {
+  // 始终输出日志，debugKey为true时加[debug]前缀
   if ($.getdata && $.getdata(CONFIG.debugKey) === 'true') {
+    console.log('[debug]', msg);
+  } else {
     console.log(msg);
   }
 }
