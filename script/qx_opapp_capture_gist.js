@@ -103,7 +103,7 @@ async function captureOpappCreds() {
   }
   // 上传 gist
   const ok = await syncToGist(localPayload);
-  if (!ok) $.msg($.name, '凭证更新失败', '同步到 Gist 失败，请查看日志');
+  if (!ok) safeNotify($.name, '凭证更新失败', '同步到 Gist 失败，请查看日志');
   else log(`[${$.name}] 已上传Gist: ${ok}`);
 }
 
