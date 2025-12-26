@@ -14,84 +14,92 @@ qx_opapp_capture_gist.js
 hostname = g.opapp.cn
 */
 
-const $ = new Env('opapp-capture-gist');
 
+const $ = new Env('opapp-capture-gist');
 const CONFIG = {
   cookieKey: 'opapp_cookie',
   csrfKey: 'opapp_csrf',
   githubTokenKey: 'opapp_github_token',
   gistIdKey: 'opapp_gist_id',
-  gistFilenameKey: 'opapp_gist_filename'
+  gistFilenameKey: 'opapp_gist_filename',
+  debugKey: 'opapp_debug'
 };
 
 (async () => {
   try {
-    await handleCapture();
+    if (typeof $request !== 'undefined') {
+      await handleCaptureRequest();
+    } else if (typeof $response !== 'undefined') {
+      await handleCaptureResponse();
+    } else {
+      log(`[${$.name}] 未检测到 request/response 环境，直接退出`);
+    }
   } catch (e) {
-    console.log(`[${$.name}] 执行异常: ${e}`);
+    log(`[${$.name}] 执行异常: ${e}`);
   }
   $done({});
 })();
 
-async function handleCapture() {
-  // 保存到本地持久化（兼容 QX/Surge/Loon）
+
+function log(msg) {
+  if ($.getdata && $.getdata(CONFIG.debugKey) === 'true') {
+    console.log(msg);
+  }
+}
+
+async function handleCaptureRequest() {
+  const headers = $request.headers || {};
+  const cookie = headers['Cookie'] || headers['cookie'];
+  const csrf = headers['X-CSRF-Token'] || headers['x-csrf-token'];
+  const origin = headers['Origin'] || headers['origin'] || headers['Referer'] || headers['referer'] || 'https://g.opapp.cn';
+  if (cookie) setValue(cookie, CONFIG.cookieKey);
+  if (csrf) setValue(csrf, CONFIG.csrfKey);
+  const reqSetCookie = headers['Set-Cookie'] || headers['set-cookie'] || null;
+  if (cookie) {
+    const payload = await buildPayload({ requestCookie: cookie, setCookieHeader: reqSetCookie, originHeader: origin });
+    const ok = await syncToGist(payload);
+    if (!ok) $.msg($.name, 'Gist同步失败', 'Cookie未能同步到GitHub Gist，请检查配置和日志');
+    log(`[${$.name}] 已上传Gist: ${ok}`);
+  } else {
+    log(`[${$.name}] 未获取到Cookie，跳过Gist上传`);
+  }
+}
+
+async function handleCaptureResponse() {
+  let body = $response.body || '';
+  const respHeaders = $response.headers || {};
   let req = (typeof $request !== 'undefined' && $request) ? $request : null;
-  let resp = (typeof $response !== 'undefined' && $response) ? $response : null;
-
-  // Capture request headers
-  if (req) {
-    const headers = req.headers || {};
-    const cookie = headers['Cookie'] || headers['cookie'];
-    const csrf = headers['X-CSRF-Token'] || headers['x-csrf-token'];
-    const origin = headers['Origin'] || headers['origin'] || headers['Referer'] || headers['referer'] || 'https://g.opapp.cn';
-    if (cookie) setValue(cookie, CONFIG.cookieKey);
-    if (csrf) setValue(csrf, CONFIG.csrfKey);
-
-    // 尝试收集 Set-Cookie（若存在于请求阶段则忽略，此处以响应阶段为主）
-    const reqSetCookie = headers['Set-Cookie'] || headers['set-cookie'] || null;
-
-    if (cookie) {
-      // 构造 JSON 并尝试上传到 Gist
-      const payload = await buildPayload({ requestCookie: cookie, setCookieHeader: reqSetCookie, originHeader: origin });
-      await syncToGist(payload);
-    }
-  }
-
-  // Capture response body for csrf
-  if (resp) {
-    let body = resp.body || '';
-    const respHeaders = resp.headers || {};
-    // 优先从响应体中解析 csrf
-    try {
-      const j = JSON.parse(body);
-      const csrfVal = j.csrf_token || j.csrf || j.token;
-      if (csrfVal) setValue(csrfVal, CONFIG.csrfKey);
-
-      // 如果响应包含 localStorage 结构或类似结构，尝试提取
-      if (j && (j.localStorage || j.localstorage || j.storage)) {
-        const storageRaw = j.localStorage || j.localstorage || j.storage;
-        const origin = (req && (req.headers && (req.headers['Origin'] || req.headers['origin']))) || 'https://g.opapp.cn';
-        const localArr = parseLocalStorage(storageRaw);
-        if (localArr.length > 0) {
-          const payload = await buildPayload({ responseLocalStorage: localArr, setCookieHeader: respHeaders['Set-Cookie'] || respHeaders['set-cookie'], originHeader: origin });
-          await syncToGist(payload);
-        }
+  // 优先从响应体中解析 csrf
+  try {
+    const j = JSON.parse(body);
+    const csrfVal = j.csrf_token || j.csrf || j.token;
+    if (csrfVal) setValue(csrfVal, CONFIG.csrfKey);
+    if (j && (j.localStorage || j.localstorage || j.storage)) {
+      const storageRaw = j.localStorage || j.localstorage || j.storage;
+      const origin = (req && (req.headers && (req.headers['Origin'] || req.headers['origin']))) || 'https://g.opapp.cn';
+      const localArr = parseLocalStorage(storageRaw);
+      if (localArr.length > 0) {
+        const payload = await buildPayload({ responseLocalStorage: localArr, setCookieHeader: respHeaders['Set-Cookie'] || respHeaders['set-cookie'], originHeader: origin });
+        const ok = await syncToGist(payload);
+        if (!ok) $.msg($.name, 'Gist同步失败', 'localStorage未能同步到GitHub Gist，请检查配置和日志');
+        log(`[${$.name}] 已上传Gist(localStorage): ${ok}`);
       }
-    } catch (e) {
-      const m = body.match(/csrf_token["']?\s*[:=]\s*["']?([0-9a-f|]+)["']?/i);
-      if (m && m[1]) setValue(m[1], CONFIG.csrfKey);
     }
-
-    // 如果响应头包含 Set-Cookie，则解析并上传（以覆盖 request 阶段简单 cookie）
-    try {
-      const setCookieHeader = respHeaders['Set-Cookie'] || respHeaders['set-cookie'] || null;
-      if (setCookieHeader) {
-        const origin = (req && (req.headers && (req.headers['Origin'] || req.headers['origin']))) || 'https://g.opapp.cn';
-        const payload = await buildPayload({ setCookieHeader: setCookieHeader, originHeader: origin });
-        await syncToGist(payload);
-      }
-    } catch (e) {}
+  } catch (e) {
+    const m = body.match(/csrf_token["']?\s*[:=]\s*["']?([0-9a-f|]+)["']?/i);
+    if (m && m[1]) setValue(m[1], CONFIG.csrfKey);
   }
+  // 如果响应头包含 Set-Cookie，则解析并上传
+  try {
+    const setCookieHeader = respHeaders['Set-Cookie'] || respHeaders['set-cookie'] || null;
+    if (setCookieHeader) {
+      const origin = (req && (req.headers && (req.headers['Origin'] || req.headers['origin']))) || 'https://g.opapp.cn';
+      const payload = await buildPayload({ setCookieHeader: setCookieHeader, originHeader: origin });
+      const ok = await syncToGist(payload);
+      if (!ok) $.msg($.name, 'Gist同步失败', 'Set-Cookie未能同步到GitHub Gist，请检查配置和日志');
+      log(`[${$.name}] 已上传Gist(Set-Cookie): ${ok}`);
+    }
+  } catch (e) {}
 }
 
 async function buildPayload(opts) {
@@ -181,25 +189,16 @@ function parseLocalStorage(storageRaw) {
 }
 
 async function syncToGist(payload) {
-  // 获取 token / gist id / filename: 优先 BoxJS -> auth.json raw
-  const boxToken = $.getdata(CONFIG.githubTokenKey);
-  const boxGistId = $.getdata(CONFIG.gistIdKey);
-  const boxFilename = $.getdata(CONFIG.gistFilenameKey) || 'opapp_cookies.json';
-
-  let token = boxToken;
-  let gistId = boxGistId;
-  let filename = boxFilename;
-
+  const token = $.getdata(CONFIG.githubTokenKey);
+  const gistId = $.getdata(CONFIG.gistIdKey);
+  const filename = $.getdata(CONFIG.gistFilenameKey) || 'opapp_cookies.json';
   if (!token || !gistId) {
-    console.log(`[${$.name}] 未配置 GitHub Token 或 Gist ID（仅使用 BoxJS 配置），跳过同步`);
+    log(`[${$.name}] 未配置 GitHub Token 或 Gist ID，跳过同步`);
     return false;
   }
-
   const content = JSON.stringify(payload, null, 2);
-
   const url = `https://api.github.com/gists/${gistId}`;
   const body = JSON.stringify({ files: { [filename]: { content: content } } });
-
   const req = {
     url: url,
     method: 'PATCH',
@@ -211,24 +210,23 @@ async function syncToGist(payload) {
     },
     body: body
   };
-
   return new Promise((resolve) => {
     if ($.isQuanX) {
       $task.fetch(req).then(resp => {
-        console.log(`[${$.name}] Gist 同步响应: ${resp.statusCode}`);
+        log(`[${$.name}] Gist 同步响应: ${resp.statusCode}`);
         if (resp.statusCode >= 200 && resp.statusCode < 300) {
-          console.log(`[${$.name}] Gist 同步成功`);
+          log(`[${$.name}] Gist 同步成功`);
           resolve(true);
         } else {
-          console.log(`[${$.name}] Gist 同步失败: ${resp.body}`);
+          log(`[${$.name}] Gist 同步失败: ${resp.body}`);
           resolve(false);
         }
       }, err => {
-        console.log(`[${$.name}] Gist 同步出错: ${err}`);
+        log(`[${$.name}] Gist 同步出错: ${err}`);
         resolve(false);
       });
     } else {
-      console.log(`[${$.name}] 当前环境不支持网络请求`);
+      log(`[${$.name}] 当前环境不支持网络请求`);
       resolve(false);
     }
   });
