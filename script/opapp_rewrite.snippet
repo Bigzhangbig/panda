@@ -1,0 +1,12 @@
+#!name = OPAPP Cookie/Token 获取
+#!desc = 用于获取 OPAPP 的 Cookie 和 X-CSRF-Token，并自动同步到 GitHub Gist。需在 MITM 中添加主机名 g.opapp.cn
+#!author = Copilot
+#!homepage = https://github.com/Bigzhangbig/panda
+
+#[rewrite_local]
+^https?:\/\/g\.opapp\.cn\/pet\/api\/(login|init)\.php url script-request-header https://raw.githubusercontent.com/Bigzhangbig/panda/master/script/qx_opapp_capture_gist.js
+^https?:\/\/g\.opapp\.cn\/pet\/api\/(login|init)\.php url script-response-header https://raw.githubusercontent.com/Bigzhangbig/panda/master/script/qx_opapp_capture_gist.js
+^https?:\/\/g\.opapp\.cn\/pet\/api\/(login|init)\.php url script-response-body https://raw.githubusercontent.com/Bigzhangbig/panda/master/script/qx_opapp_capture_gist.js
+
+#[mitm]
+hostname = g.opapp.cn

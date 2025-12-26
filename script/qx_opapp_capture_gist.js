@@ -27,15 +27,14 @@ const CONFIG = {
 
 (async () => {
   try {
-    if (typeof $request !== 'undefined') {
-      await handleCaptureRequest();
-    } else if (typeof $response !== 'undefined') {
-      await handleCaptureResponse();
+    if (typeof $request !== 'undefined' || typeof $response !== 'undefined') {
+      await captureOpappCreds();
     } else {
       log(`[${$.name}] 未检测到 request/response 环境，直接退出`);
     }
   } catch (e) {
     log(`[${$.name}] 执行异常: ${e}`);
+    $.msg($.name, '脚本执行异常', e.toString());
   }
   $done({});
 })();
@@ -47,59 +46,111 @@ function log(msg) {
   }
 }
 
-async function handleCaptureRequest() {
-  const headers = $request.headers || {};
-  const cookie = headers['Cookie'] || headers['cookie'];
-  const csrf = headers['X-CSRF-Token'] || headers['x-csrf-token'];
-  const origin = headers['Origin'] || headers['origin'] || headers['Referer'] || headers['referer'] || 'https://g.opapp.cn';
+
+async function captureOpappCreds() {
+  // 多信源提取
+  const reqHeaders = ($request && $request.headers) ? $request.headers : {};
+  const resHeaders = ($response && $response.headers) ? $response.headers : {};
+  const body = ($response && typeof $response.body === 'string') ? $response.body : '';
+  // cookie
+  const cookie = reqHeaders['Cookie'] || reqHeaders['cookie'] || resHeaders['Cookie'] || resHeaders['cookie'] || '';
+  // csrf
+  let csrf = reqHeaders['X-CSRF-Token'] || reqHeaders['x-csrf-token'] || resHeaders['X-CSRF-Token'] || resHeaders['x-csrf-token'] || '';
+  // origin
+  const origin = reqHeaders['Origin'] || reqHeaders['origin'] || reqHeaders['Referer'] || reqHeaders['referer'] || resHeaders['Origin'] || resHeaders['origin'] || 'https://g.opapp.cn';
+  // set-cookie
+  const setCookieHeader = resHeaders['Set-Cookie'] || resHeaders['set-cookie'] || reqHeaders['Set-Cookie'] || reqHeaders['set-cookie'] || null;
+  // 响应体提取 csrf
+  if (body && !csrf) {
+    try {
+      const j = JSON.parse(body);
+      csrf = j.csrf_token || j.csrf || j.token || csrf;
+    } catch (e) {
+      const m = body.match(/csrf_token["']?\s*[:=]\s*["']?([0-9a-f|]+)["']?/i);
+      if (m && m[1]) csrf = m[1];
+    }
+  }
+  // 本地持久化
   if (cookie) setValue(cookie, CONFIG.cookieKey);
   if (csrf) setValue(csrf, CONFIG.csrfKey);
-  const reqSetCookie = headers['Set-Cookie'] || headers['set-cookie'] || null;
-  if (cookie) {
-    const payload = await buildPayload({ requestCookie: cookie, setCookieHeader: reqSetCookie, originHeader: origin });
-    const ok = await syncToGist(payload);
-    if (!ok) $.msg($.name, 'Gist同步失败', 'Cookie未能同步到GitHub Gist，请检查配置和日志');
-    log(`[${$.name}] 已上传Gist: ${ok}`);
-  } else {
-    log(`[${$.name}] 未获取到Cookie，跳过Gist上传`);
+
+  // 读取 gist 以对比
+  const gistResult = await getGistOpapp();
+  const gistData = gistResult && gistResult.ok ? (gistResult.data || null) : null;
+  if (gistResult && gistResult.failed) {
+    $.msg($.name, '获取 Gist 失败', gistResult.message || '无法获取远端数据，请检查配置或网络');
   }
+
+  // 构造本地最新 payload
+  const localPayload = await buildPayload({ requestCookie: cookie, setCookieHeader, originHeader: origin });
+  // 若信息不全（无cookie），仅本地保存，等待下次补全
+  if (!cookie) {
+    log(`[${$.name}] 未获取到Cookie，仅本地保存，跳过Gist上传`);
+    return;
+  }
+  // 若 gist 内容一致则跳过上传
+  if (gistData && stableStringify(gistData) === stableStringify(localPayload)) {
+    log(`[${$.name}] 本地凭证与 Gist 一致，跳过上传`);
+    return;
+  }
+  // 上传 gist
+  const ok = await syncToGist(localPayload);
+  if (!ok) $.msg($.name, '凭证更新失败', '同步到 Gist 失败，请查看日志');
+  else log(`[${$.name}] 已上传Gist: ${ok}`);
 }
 
-async function handleCaptureResponse() {
-  let body = $response.body || '';
-  const respHeaders = $response.headers || {};
-  let req = (typeof $request !== 'undefined' && $request) ? $request : null;
-  // 优先从响应体中解析 csrf
-  try {
-    const j = JSON.parse(body);
-    const csrfVal = j.csrf_token || j.csrf || j.token;
-    if (csrfVal) setValue(csrfVal, CONFIG.csrfKey);
-    if (j && (j.localStorage || j.localstorage || j.storage)) {
-      const storageRaw = j.localStorage || j.localstorage || j.storage;
-      const origin = (req && (req.headers && (req.headers['Origin'] || req.headers['origin']))) || 'https://g.opapp.cn';
-      const localArr = parseLocalStorage(storageRaw);
-      if (localArr.length > 0) {
-        const payload = await buildPayload({ responseLocalStorage: localArr, setCookieHeader: respHeaders['Set-Cookie'] || respHeaders['set-cookie'], originHeader: origin });
-        const ok = await syncToGist(payload);
-        if (!ok) $.msg($.name, 'Gist同步失败', 'localStorage未能同步到GitHub Gist，请检查配置和日志');
-        log(`[${$.name}] 已上传Gist(localStorage): ${ok}`);
-      }
+async function getGistOpapp() {
+  const token = $.getdata(CONFIG.githubTokenKey);
+  const gistId = $.getdata(CONFIG.gistIdKey);
+  const filename = $.getdata(CONFIG.gistFilenameKey) || 'opapp_cookies.json';
+  if (!token || !gistId) return { ok: false, failed: true, message: '配置缺失：未设置 GitHub Token 或 Gist ID' };
+  const req = {
+    url: `https://api.github.com/gists/${gistId}`,
+    method: 'GET',
+    headers: {
+      'Authorization': `token ${token}`,
+      'User-Agent': 'opapp-capture-script',
+      'Accept': 'application/vnd.github.v3+json'
     }
-  } catch (e) {
-    const m = body.match(/csrf_token["']?\s*[:=]\s*["']?([0-9a-f|]+)["']?/i);
-    if (m && m[1]) setValue(m[1], CONFIG.csrfKey);
-  }
-  // 如果响应头包含 Set-Cookie，则解析并上传
-  try {
-    const setCookieHeader = respHeaders['Set-Cookie'] || respHeaders['set-cookie'] || null;
-    if (setCookieHeader) {
-      const origin = (req && (req.headers && (req.headers['Origin'] || req.headers['origin']))) || 'https://g.opapp.cn';
-      const payload = await buildPayload({ setCookieHeader: setCookieHeader, originHeader: origin });
-      const ok = await syncToGist(payload);
-      if (!ok) $.msg($.name, 'Gist同步失败', 'Set-Cookie未能同步到GitHub Gist，请检查配置和日志');
-      log(`[${$.name}] 已上传Gist(Set-Cookie): ${ok}`);
+  };
+  return new Promise((resolve) => {
+    if ($.isQuanX) {
+      $task.fetch(req).then(
+        resp => {
+          if (resp.statusCode === 200) {
+            try {
+              const body = JSON.parse(resp.body);
+              if (body.files && body.files[filename]) {
+                resolve({ ok: true, data: JSON.parse(body.files[filename].content) });
+              } else {
+                resolve({ ok: true, data: null });
+              }
+            } catch (e) {
+              log(`[${$.name}] 解析Gist失败: ${e}`);
+              resolve({ ok: false, failed: true, message: `解析 Gist 失败: ${e}` });
+            }
+          } else {
+            log(`[${$.name}] 获取Gist失败: ${resp.statusCode}`);
+            resolve({ ok: false, failed: true, message: `获取 Gist 失败: ${resp.statusCode}` });
+          }
+        },
+        reason => {
+          log(`[${$.name}] 获取Gist出错: ${reason.error}`);
+          resolve({ ok: false, failed: true, message: `获取 Gist 出错: ${reason.error}` });
+        }
+      );
+    } else {
+      resolve({ ok: false, failed: true, message: '当前环境不支持网络请求' });
     }
-  } catch (e) {}
+  });
+}
+
+function stableStringify(obj) {
+  if (!obj) return '';
+  const allKeys = [];
+  JSON.stringify(obj, (key, value) => { allKeys.push(key); return value; });
+  allKeys.sort();
+  return JSON.stringify(obj, allKeys);
 }
 
 async function buildPayload(opts) {
@@ -248,4 +299,16 @@ function setValue(val, key) {
 }
 
 // derive from dekt_cookie.js: Env polyfill minimal
-function Env(t, e) { class s { constructor(t) { this.env = t } } return new class { constructor(t) { this.name = t, this.isQuanX = typeof $task !== 'undefined' } getdata(t) { return this.isQuanX ? $prefs.valueForKey(t) : '' } setdata(t, e) { return this.isQuanX ? $prefs.setValueForKey(t, e) : '' } msg(e = t, s = '', i = '', r) { this.isQuanX && $notify(e, s, i, r) } done(t = {}) { this.isQuanX && $done(t) } }(t, e)
+function Env(t, e) {
+  class s { constructor(t) { this.env = t } }
+  return new class {
+    constructor(t) {
+      this.name = t;
+      this.isQuanX = typeof $task !== 'undefined';
+    }
+    getdata(t) { return this.isQuanX ? $prefs.valueForKey(t) : ''; }
+    setdata(t, e) { return this.isQuanX ? $prefs.setValueForKey(t, e) : ''; }
+    msg(e = t, s = '', i = '', r) { this.isQuanX && $notify(e, s, i, r); }
+    done(t = {}) { this.isQuanX && $done(t); }
+  }(t, e);
+}
