@@ -1,0 +1,95 @@
+{
+  "id": "opapp",
+  "name": "熊猫乐园 (opapp.cn)",
+  "author": "@Bigzhangbig",
+  "icon": "https://raw.githubusercontent.com/Bigzhangbig/panda/master/icon.jpg",
+  "repo": "https://github.com/Bigzhangbig/panda",
+  "apps": [
+    {
+      "id": "opapp",
+      "name": "熊猫乐园",
+      "keys": ["opapp_cookie", "opapp_csrf", "opapp_github_token", "opapp_gist_id", "opapp_gist_filename", "opapp_tasks"],
+      "descs_html": [
+        "可使用抓包脚本获取 Cookie 与 X-CSRF-Token，或手动粘贴到下方。",
+        "脚本支持自动执行签到、观看视频、答题、拍照分享、游乐园项等任务。"
+      ],
+      "settings": [
+        {
+          "id": "opapp_cookie",
+          "name": "opapp Cookie",
+          "val": "",
+          "type": "text",
+          "desc": "可选：如果未使用抓包脚本，可手动粘贴请求中的 Cookie"
+        },
+        {
+          "id": "opapp_csrf",
+          "name": "opapp X-CSRF-Token",
+          "val": "",
+          "type": "text",
+          "desc": "可选：手动粘贴 X-CSRF-Token（抓包脚本会自动保存）"
+        },
+        {
+          "id": "opapp_github_token",
+          "name": "GitHub Token (Gist)",
+          "val": "",
+          "type": "text",
+          "desc": "用于自动同步 Cookie 到 Gist，可在 BoxJS 中修改覆盖 auth.json"
+        },
+        {
+          "id": "opapp_gist_id",
+          "name": "Gist ID",
+          "val": "",
+          "type": "text",
+          "desc": "要更新的 Gist ID，可在 BoxJS 中设置覆盖 auth.json"
+        },
+        {
+          "id": "opapp_gist_filename",
+          "name": "Gist 文件名",
+          "val": "opapp_cookies.json",
+          "type": "text",
+          "desc": "Gist 中的文件名，默认为 opapp_cookies.json，可在 BoxJS 中修改"
+        },
+        {
+          "id": "opapp_tasks",
+          "name": "自动任务选择",
+          "val": [],
+          "type": "checkboxes",
+          "items": [
+            {"key": "sign", "label": "签到"},
+            {"key": "first", "label": "首次喂养"},
+            {"key": "park", "label": "游乐园（含大合成/对对碰/节节高入口）"},
+            {"key": "stroke", "label": "摸一摸"},
+            {"key": "toys", "label": "陪我玩(玩具)"},
+            {"key": "photo", "label": "拍照分享"},
+            {"key": "qa", "label": "答题"},
+            {"key": "video", "label": "观看视频（脚本会按要求执行多次并等待时长）"},
+            {"key": "ecard", "label": "开卡/领取卡券（若可用）"},
+            {"key": "food", "label": "喂食/首次喂养等"}
+          ],
+          "desc": "勾选要执行的任务（多选）。脚本会按选中项顺序执行，若为空则使用默认任务列表。"
+        }
+      ],
+      "icons": [
+        "https://raw.githubusercontent.com/Bigzhangbig/panda/master/icon.jpg",
+        "https://raw.githubusercontent.com/Bigzhangbig/panda/master/icon.jpg"
+      ],
+      "scripts": [
+        {
+          "name": "抓包并保存 Cookie - Capture",
+          "script": "https://raw.githubusercontent.com/Bigzhangbig/panda/master/script/qx_opapp_capture.js",
+          "desc": "在 Quantumult X/Surge/Loon 中启用重写或抓包规则，捕获 `Cookie` 与 `X-CSRF-Token` 并保存到持久化键。"
+        },
+        {
+          "name": "抓包并同步 Gist - Capture & Gist",
+          "script": "https://raw.githubusercontent.com/Bigzhangbig/panda/master/script/qx_opapp_capture_gist.js",
+          "desc": "在捕获 Cookie 后自动将其上传到 GitHub Gist（优先使用 BoxJS 中的 Gist 配置，未设置时使用仓库中的 auth.json）。"
+        },
+        {
+          "name": "自动任务执行 - Task Runner",
+          "script": "https://raw.githubusercontent.com/Bigzhangbig/panda/master/script/qx_opapp_task.js",
+          "desc": "执行 BoxJS 中 `opapp_tasks` 指定的任务；若未指定则执行常见任务集合（签到、观看视频、答题、拍照等）。支持游乐园入口的自动触发（大合成/对对碰/节节高）。"
+        }
+      ]
+    }
+  ]
+}
