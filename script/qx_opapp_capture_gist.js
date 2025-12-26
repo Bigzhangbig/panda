@@ -291,12 +291,14 @@ async function syncToGist(payload) {
 // 兼容持久化写入
 function setValue(val, key) {
   try {
+    let ok = false;
     if (typeof $prefs !== 'undefined' && $prefs.setValueForKey) {
-      return $prefs.setValueForKey(val, key);
+      ok = $prefs.setValueForKey(val, key);
     }
-    if (typeof $persistentStore !== 'undefined' && $persistentStore.write) {
-      return $persistentStore.write(val, key);
+    if ((!ok || ok === undefined) && typeof $persistentStore !== 'undefined' && $persistentStore.write) {
+      ok = $persistentStore.write(val, key);
     }
+    return ok;
   } catch (e) {}
   return false;
 }
