@@ -85,7 +85,12 @@ async function captureOpappCreds() {
   }
 
   // 构造本地最新 payload
-  const localPayload = await buildPayload({ requestCookie: cookie, setCookieHeader, originHeader: origin });
+  const localPayload = await buildPayload({ 
+      requestCookie: cookie, 
+      setCookieHeader, 
+      originHeader: origin,
+      tokenExpire: validation.tokenExpire 
+  });
   // 若信息不全（无cookie），仅本地保存，等待下次补全
   if (!cookie) {
     log(`[${$.name}] 未获取到Cookie，仅本地保存，跳过Gist上传`);
@@ -100,6 +105,50 @@ async function captureOpappCreds() {
   const ok = await syncToGist(localPayload);
   if (!ok) $.msg($.name, '凭证更新失败', '同步到 Gist 失败，请查看日志');
   else log(`[${$.name}] 已上传Gist: ${ok}`);
+}
+
+function validateAndParseCookies(cookieStr, setCookieHeader) {
+  const result = { valid: false, missing: [], tokenExpire: 0 };
+  if (!cookieStr) {
+    result.missing.push('CookieString');
+    return result;
+  }
+  
+  // 检查关键字段
+  const hasPhpSessId = /PHPSESSID=/i.test(cookieStr) || (setCookieHeader && /PHPSESSID=/i.test(String(setCookieHeader)));
+  const hasToken = /token=/i.test(cookieStr) || (setCookieHeader && /token=/i.test(String(setCookieHeader)));
+
+  if (!hasPhpSessId) result.missing.push('PHPSESSID');
+  if (!hasToken) result.missing.push('token');
+
+  if (result.missing.length === 0) result.valid = true;
+
+  // 解析 token 有效期 (从 Set-Cookie 中查找)
+  if (setCookieHeader) {
+    const scs = Array.isArray(setCookieHeader) ? setCookieHeader : String(setCookieHeader).split(/,(?=[^;]+=)/);
+    for (const sc of scs) {
+      if (sc.trim().startsWith('token=')) {
+        const maxAgeMatch = sc.match(/Max-Age=(\d+)/i);
+        if (maxAgeMatch) {
+          const maxAge = parseInt(maxAgeMatch[1], 10);
+          result.tokenExpire = Date.now() + (maxAge * 1000);
+        } else {
+            // 如果没有 Max-Age，尝试 Expires
+            const expiresMatch = sc.match(/Expires=([^;]+)/i);
+            if (expiresMatch) {
+                const expires = Date.parse(expiresMatch[1]);
+                if (!isNaN(expires)) result.tokenExpire = expires;
+            }
+        }
+      }
+    }
+  }
+  // 如果没有从 Set-Cookie 解析到过期时间，且 Cookie 中有 token，默认给一个较短的有效期或者不更新
+  if (!result.tokenExpire && hasToken) {
+     // 无法准确判断，不设置，由任务脚本自行处理或默认不过期
+  }
+
+  return result;
 }
 
 async function getGistOpapp() {

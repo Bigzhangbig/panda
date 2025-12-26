@@ -8,26 +8,12 @@
     {
       "id": "opapp",
       "name": "熊猫乐园",
-      "keys": ["opapp_cookie", "opapp_csrf", "opapp_github_token", "opapp_gist_id", "opapp_gist_filename", "opapp_tasks"],
+      "keys": ["opapp_cookie", "opapp_csrf", "opapp_token_expire", "opapp_github_token", "opapp_gist_id", "opapp_gist_filename", "opapp_tasks"],
       "descs_html": [
-        "可使用抓包脚本获取 Cookie 与 X-CSRF-Token，或手动粘贴到下方。",
-        "脚本支持自动执行签到、观看视频、答题、拍照分享、游乐园项等任务。"
+        "Cookie 与 Token 由脚本自动抓取和管理，无需手动配置。",
+        "请配置下方的 Gist 信息以支持多设备同步。"
       ],
       "settings": [
-        {
-          "id": "opapp_cookie",
-          "name": "opapp Cookie",
-          "val": "",
-          "type": "text",
-          "desc": "可选：如果未使用抓包脚本，可手动粘贴请求中的 Cookie"
-        },
-        {
-          "id": "opapp_csrf",
-          "name": "opapp X-CSRF-Token",
-          "val": "",
-          "type": "text",
-          "desc": "可选：手动粘贴 X-CSRF-Token（抓包脚本会自动保存）"
-        },
         {
           "id": "opapp_github_token",
           "name": "GitHub Token (Gist)",
@@ -57,13 +43,14 @@
           "items": [
             {"key": "sign", "label": "签到"},
             {"key": "first", "label": "首次喂养"},
-            {"key": "park", "label": "游乐园（含大合成/对对碰/节节高入口）"},
+            {"key": "big", "label": "熊猫大合成"},
+            {"key": "ddp", "label": "熊猫对对碰"},
+            {"key": "c1", "label": "胖达节节高"},
             {"key": "stroke", "label": "摸一摸"},
             {"key": "toys", "label": "陪我玩(玩具)"},
             {"key": "photo", "label": "拍照分享"},
             {"key": "qa", "label": "答题"},
             {"key": "video", "label": "观看视频（脚本会按要求执行多次并等待时长）"},
-            {"key": "ecard", "label": "开卡/领取卡券（若可用）"},
             {"key": "food", "label": "喂食/首次喂养等"}
           ],
           "desc": "勾选要执行的任务（多选）。脚本会按选中项顺序执行，若为空则使用默认任务列表。"
